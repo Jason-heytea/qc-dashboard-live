@@ -1305,6 +1305,63 @@ tr:nth-child(even):hover td { background: var(--hover-row); }
   .modal-chat .work-order-attachments { margin-top: 8px !important; }
   .modal-chat .screenshot-item { font-size: 11px !important; padding: 3px 8px !important; }
 }
+
+/* Skeleton loading */
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.6; }
+}
+.skeleton-active .kpi-card .value,
+.skeleton-active .kpi-card .delta {
+  background: rgba(255,255,255,0.12);
+  border-radius: 4px;
+  color: transparent !important;
+  animation: skeleton-pulse 1.5s ease-in-out infinite;
+  min-height: 28px;
+}
+.skeleton-active .chart-box {
+  position: relative;
+}
+.skeleton-active .chart-box::after {
+  content: '';
+  position: absolute;
+  top: 40px; left: 20px; right: 20px; bottom: 20px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 8px;
+  animation: skeleton-pulse 1.5s ease-in-out infinite;
+}
+.dashboard-fade-in {
+  animation: fadeIn 0.5s ease-out forwards;
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Trend chart toggle */
+.trend-toggles {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.trend-toggle {
+  padding: 3px 12px;
+  border-radius: 14px;
+  border: 1.5px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+.trend-toggle.active {
+  border-color: var(--toggle-color);
+  color: var(--toggle-color);
+  background: color-mix(in srgb, var(--toggle-color) 10%, transparent);
+  font-weight: 600;
+}
 </style>
 </head>
 <body>
@@ -1423,7 +1480,14 @@ tr:nth-child(even):hover td { background: var(--hover-row); }
 <!-- Charts Area -->
 <div class="chart-grid">
   <div class="chart-box chart-full hidden" id="trendSection">
-    <h3>每日达标率趋势</h3>
+    <h3>趋势</h3>
+    <div class="trend-toggles" id="trendToggles">
+      <button class="trend-toggle active" style="--toggle-color:#E8683A" data-idx="0" onclick="toggleTrendIndicator(this)">达标率</button>
+      <button class="trend-toggle" style="--toggle-color:#2B6B5E" data-idx="1" onclick="toggleTrendIndicator(this)">均分</button>
+      <button class="trend-toggle" style="--toggle-color:#D4A03C" data-idx="2" onclick="toggleTrendIndicator(this)">服务达标率</button>
+      <button class="trend-toggle" style="--toggle-color:#8B6B8A" data-idx="3" onclick="toggleTrendIndicator(this)">工单达标率</button>
+      <button class="trend-toggle" style="--toggle-color:#7A9CB8" data-idx="4" onclick="toggleTrendIndicator(this)">业务达标率</button>
+    </div>
     <canvas id="chartTrend"></canvas>
   </div>
   <div class="chart-box">
@@ -1626,6 +1690,8 @@ var RECORDS_DATA = null;
 var RECORDS_LOADING = false;
 
 document.getElementById('loadingOverlay').style.display = 'flex';
+// Show skeleton screens behind loading overlay
+document.body.classList.add('skeleton-active');
 
 // Phase 1: Load summary (small, ~52KB) — dashboard usable immediately
 fetch('data/summary.json').then(function(r) { return r.json(); }).then(function(summary) {
@@ -1639,6 +1705,12 @@ fetch('data/summary.json').then(function(r) { return r.json(); }).then(function(
   
   document.getElementById('loadingOverlay').style.display = 'none';
   initDashboard();
+  
+  // Remove skeleton, fade in dashboard
+  document.body.classList.remove('skeleton-active');
+  var dv = document.getElementById('dashboardView');
+  if (dv) dv.classList.add('dashboard-fade-in');
+  setTimeout(function() { if (dv) dv.classList.remove('dashboard-fade-in'); }, 600);
   
   // Phase 2: Load records in background (large)
   loadRecords();
@@ -1988,60 +2060,135 @@ function updateCharts(filteredDaily, allStats, start, end) {
   }
 }
 
+// ==================== TREND CHART (multi-indicator) ====================
+var trendIndicators = [
+  { key: 'overall_rate', label: '达标率', color: '#E8683A', yAxis: 'y', isPercent: true },
+  { key: 'avg_score', label: '均分', color: '#2B6B5E', yAxis: 'y1', isPercent: false },
+  { key: 'sq1_rate', label: '服务达标率', color: '#D4A03C', yAxis: 'y', isPercent: true },
+  { key: 'qc1_rate', label: '工单达标率', color: '#8B6B8A', yAxis: 'y', isPercent: true },
+  { key: 'biz_rate', label: '业务达标率', color: '#7A9CB8', yAxis: 'y', isPercent: true }
+];
+
 function renderTrendChart(filtered) {
   destroyChart('chartTrend');
   var dates = filtered.map(function(d) { return d.date.slice(5); });
-  var rates = filtered.map(function(d) { return d.overall_rate; });
   var ctx = document.getElementById('chartTrend').getContext('2d');
   var xTickCount = filtered.length > 20 ? 5 : (filtered.length > 10 ? 7 : 10);
   var hasDataLabels = !window.DATALABELS_FAILED && typeof ChartDataLabels !== 'undefined';
+
+  // Build datasets from active indicators
+  var datasets = [];
+  var activePercentCount = 0;
+  var hasScore = false;
+  var buttons = document.querySelectorAll('#trendToggles .trend-toggle');
+
+  trendIndicators.forEach(function(ind, idx) {
+    if (!buttons[idx] || !buttons[idx].classList.contains('active')) return;
+    if (ind.isPercent) activePercentCount++;
+    else hasScore = true;
+
+    var data = filtered.map(function(d) { return d[ind.key]; });
+    var ds = {
+      label: ind.label,
+      data: data,
+      borderColor: ind.color,
+      backgroundColor: ind.color + '14',
+      tension: 0.3,
+      pointRadius: 3,
+      pointBackgroundColor: ind.color,
+      borderWidth: 2.5,
+      yAxisID: ind.yAxis,
+      fill: false
+    };
+    // Data labels only when single indicator is active
+    ds.datalabels = {
+      display: (activePercentCount + (hasScore ? 1 : 0) === 1) && hasDataLabels,
+      align: 'top', anchor: 'end', color: '#000000',
+      font: { size: 10, weight: '600' }, offset: 4,
+      formatter: function(v) { return ind.isPercent ? (v ? v.toFixed(1) + '%' : '') : (v ? v.toFixed(1) : ''); }
+    };
+    datasets.push(ds);
+  });
+
+  // Target line (90% dashed) — show when any percent indicator is active
+  if (activePercentCount > 0) {
+    datasets.push({
+      label: '目标 90%',
+      data: dates.map(function() { return 90; }),
+      borderColor: '#C45C5C',
+      borderWidth: 1.5,
+      borderDash: [6, 4],
+      pointRadius: 0,
+      fill: false,
+      yAxisID: 'y',
+      datalabels: { display: false },
+      legend: { display: true }
+    });
+  }
+
   var plugins = hasDataLabels ? [ChartDataLabels] : [];
+
   try {
     chartInstances.chartTrend = new Chart(ctx, {
       type: 'line',
-      data: {
-        labels: dates,
-        datasets: [{
-          label: '达标率',
-          data: rates,
-          borderColor: '#E8683A',
-          backgroundColor: 'rgba(232,104,58,0.08)',
-          fill: true,
-          tension: 0.3,
-          pointRadius: 3,
-          pointBackgroundColor: '#E8683A',
-          borderWidth: 2.5,
-          yAxisID: 'y'
-        }]
-      },
+      data: { labels: dates, datasets: datasets },
       plugins: plugins,
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
         plugins: {
-          legend: { display: false },
-          datalabels: {
-            display: hasDataLabels,
-            align: 'top',
-            anchor: 'end',
-            color: '#000000',
-            font: { size: 10, weight: '600' },
-            offset: 4,
-            formatter: function(v) { return v ? v.toFixed(1) + '%' : ''; }
-          }
+          legend: {
+            display: true,
+            position: 'top',
+            align: 'end',
+            labels: {
+              usePointStyle: true,
+              pointStyle: 'line',
+              font: { size: 11 },
+              color: '#000000',
+              padding: 12,
+              filter: function(item) { return item.text !== '目标 90%'; }
+            }
+          },
+          datalabels: { display: false }
         },
         scales: {
-          x: { grid: { color: '#F3F4F6' }, ticks: { font: { size: 11 }, color: '#000000', maxRotation: 0, autoSkip: true, maxTicksLimit: xTickCount } },
+          x: {
+            grid: { color: '#F3F4F6' },
+            ticks: { font: { size: 11 }, color: '#000000', maxRotation: 0, autoSkip: true, maxTicksLimit: xTickCount }
+          },
           y: {
+            type: 'linear',
+            position: 'left',
             beginAtZero: true,
             max: 100,
+            display: activePercentCount > 0,
             grid: { color: '#F3F4F6' },
             ticks: { font: { size: 11 }, color: '#000000', stepSize: 10, callback: function(v) { return v + '%'; } }
+          },
+          y1: {
+            type: 'linear',
+            position: 'right',
+            beginAtZero: true,
+            max: 100,
+            display: hasScore,
+            grid: { drawOnChartArea: false },
+            ticks: { font: { size: 11 }, color: '#2B6B5E', stepSize: 10, callback: function(v) { return v + '分'; } }
           }
         }
       }
     });
   } catch(e) { console.error('TrendChart error:', e); }
+}
+
+function toggleTrendIndicator(btn) {
+  var activeBtns = document.querySelectorAll('#trendToggles .trend-toggle.active');
+  if (btn.classList.contains('active') && activeBtns.length <= 1) return;
+  btn.classList.toggle('active');
+  // Re-render with current date range
+  var filtered = dailyStats.filter(function(d) { return d.date >= startDate && d.date <= endDate; });
+  renderTrendChart(filtered);
 }
 
 function renderDimBarChart(filtered) {
