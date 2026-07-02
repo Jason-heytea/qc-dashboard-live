@@ -1711,41 +1711,10 @@ fetch('data/summary.json').then(function(r) { return r.json(); }).then(function(
   var dv = document.getElementById('dashboardView');
   if (dv) dv.classList.add('dashboard-fade-in');
   setTimeout(function() { if (dv) dv.classList.remove('dashboard-fade-in'); }, 600);
-  
-  // Phase 2: Load records in background (large)
-  loadRecords();
 }).catch(function(err) {
   document.getElementById('loadingOverlay').innerHTML =
     '<div style="color:#fff;text-align:center"><h2>数据加载失败</h2><p>' + err.message + '</p></div>';
 });
-
-function loadRecords() {
-  if (RECORDS_DATA !== null) return Promise.resolve(RECORDS_DATA);
-  RECORDS_LOADING = true;
-  return fetch('data/records.json').then(function(r) { return r.json(); }).then(function(data) {
-    RECORDS_DATA = data;
-    records = data;
-    RECORDS_LOADING = false;
-    populateRankTeamFilter();
-    // Re-render views that depend on records
-    if (typeof startDate !== 'undefined' && startDate && endDate) {
-      updateView(startDate, endDate);
-    }
-    // If currently on ranking or query view, re-render with data
-    if (!document.getElementById('rankingView').classList.contains('hidden')) {
-      renderRanking();
-    }
-    if (!document.getElementById('queryView').classList.contains('hidden')) {
-      renderRecords();
-    }
-    return RECORDS_DATA;
-  }).catch(function(err) {
-    RECORDS_LOADING = false;
-    console.warn('Records加载失败，扣分自查和排名功能不可用:', err);
-    RECORDS_DATA = [];
-    return [];
-  });
-}
 
 function initDashboard() {
 
@@ -3344,6 +3313,35 @@ function populateRankTeamFilter() {
   });
 }
 
+// ==================== LOAD RECORDS (Phase 2) ====================
+function loadRecords() {
+  if (RECORDS_DATA !== null) return Promise.resolve(RECORDS_DATA);
+  RECORDS_LOADING = true;
+  return fetch('data/records.json').then(function(r) { return r.json(); }).then(function(data) {
+    RECORDS_DATA = data;
+    records = data;
+    RECORDS_LOADING = false;
+    populateRankTeamFilter();
+    // Re-render views that depend on records
+    if (typeof startDate !== 'undefined' && startDate && endDate) {
+      updateView(startDate, endDate);
+    }
+    // If currently on ranking or query view, re-render with data
+    if (!document.getElementById('rankingView').classList.contains('hidden')) {
+      renderRanking();
+    }
+    if (!document.getElementById('queryView').classList.contains('hidden')) {
+      renderRecords();
+    }
+    return RECORDS_DATA;
+  }).catch(function(err) {
+    RECORDS_LOADING = false;
+    console.warn('Records加载失败，扣分自查和排名功能不可用:', err);
+    RECORDS_DATA = [];
+    return [];
+  });
+}
+
 // ==================== CHAT MODAL ====================
 function openChatModal(rec) {
   document.getElementById('modalConvId').textContent = rec.conv_id;
@@ -3537,6 +3535,8 @@ function closeChatModal() {
     renderExcellentCases();
     // 自动加载自查询区：显示全部班组数据（异步避免阻塞渲染）
     setTimeout(function() { applyTeamFilter(); }, 0);
+    // Phase 2: 后台加载明细数据
+    loadRecords();
   } catch(e) {
     document.getElementById('kpiTotal').textContent = 'ERR: ' + e.message;
     document.getElementById('kpiTotal').parentElement.style.color = 'var(--red)';
